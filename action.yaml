@@ -1,0 +1,83 @@
+# .github/actions/update-pr-description/action.yaml
+name: 'Manage PR Description'
+description: 'Create or update a PR description with a unique ID'
+
+inputs:
+  github-token:
+    description: 'GitHub token for API authentication'
+    required: true
+  section-id:
+    description: 'Unique identifier for the section (e.g., "pr-environment")'
+    required: true
+  content:
+    description: 'The content to insert between the tags (markdown supported)'
+    required: true
+  pr-number:
+    description: 'The PR number (optional, auto-detected if not provided)'
+    required: false
+runs:
+  using: 'composite'
+  steps:
+    - name: Get PR Number
+      id: pr-number
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.pr-number }}" ]; then
+          echo "number=${{ inputs.pr-number }}" >> $GITHUB_OUTPUT
+        else
+          echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Update PR description
+      uses: actions/github-script@v7
+      env:
+        PR_NUMBER: ${{ inputs.pr-number }}
+        SECTION_ID: ${{ inputs.section-id }}
+        CONTENT: ${{ inputs.content }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const prNumber = parseInt(process.env.PR_NUMBER, 10);
+          const sectionId = process.env.SECTION_ID;
+          const newContent = process.env.CONTENT;
+
+          // Define the markers
+          const startMarker = `<!-- auto-generated: ${sectionId} -->`;
+          const endMarker = `<!-- end auto-generated: ${sectionId} -->`;
+
+          // Get current PR description
+          const { data: pr } = await github.rest.pulls.get({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: prNumber
+          });
+
+          let currentBody = pr.body || '';
+
+          // Build the new section
+          const newSection = `${startMarker}\n${newContent}\n${endMarker}`;
+
+          // Check if section already exists
+          const startIndex = currentBody.indexOf(startMarker);
+          const endIndex = currentBody.indexOf(endMarker);
+
+          let updatedBody;
+          if (startIndex !== -1 && endIndex !== -1) {
+            // Replace existing section
+            updatedBody = currentBody.substring(0, startIndex) +
+                          newSection +
+                          currentBody.substring(endIndex + endMarker.length);
+          } else {
+            // Append new section at the end
+            updatedBody = currentBody.trim() + '\n\n---\n\n' + newSection;
+          }
+
+          // Update the PR
+          await github.rest.pulls.update({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: prNumber,
+            body: updatedBody
+          });
+
+          console.log(`✅ Updated PR #${prNumber} description with section: ${sectionId}`);
