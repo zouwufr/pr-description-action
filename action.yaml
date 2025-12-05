@@ -115,3 +115,7 @@ runs:
 
           core.setOutput('updated', wasUpdated);
           console.log(`✅ Successfully ${wasUpdated ? 'updated' : 'created'} section in PR #${prNumber}`);
+
+branding:
+  icon: 'message-square'
+  color: 'blue'
