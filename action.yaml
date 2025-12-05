@@ -1,6 +1,6 @@
-# .github/actions/update-pr-description/action.yaml
 name: 'Manage PR Description'
 description: 'Create or update a PR description with a unique ID'
+author: 'zouwu.fr'
 
 inputs:
   github-token:
@@ -15,6 +15,12 @@ inputs:
   pr-number:
     description: 'The PR number (optional, auto-detected if not provided)'
     required: false
+
+outputs:
+  updated:
+    description: 'Whether the section was updated (true) or created (false)'
+    value: ${{ steps.update-pr.outputs.updated }}
+
 runs:
   using: 'composite'
   steps:
@@ -25,13 +31,19 @@ runs:
         if [ -n "${{ inputs.pr-number }}" ]; then
           echo "number=${{ inputs.pr-number }}" >> $GITHUB_OUTPUT
         else
-          echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          PR_NUM="${{ github.event.pull_request.number }}"
+          if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
+            echo "::error::Could not determine PR number. Make sure this action runs in a pull_request context or provide pr-number input."
+            exit 1
+          fi
+          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
         fi
 
     - name: Update PR description
+      id: update-pr
       uses: actions/github-script@v7
       env:
-        PR_NUMBER: ${{ inputs.pr-number }}
+        PR_NUMBER: ${{ steps.pr-number.outputs.number }}
         SECTION_ID: ${{ inputs.section-id }}
         CONTENT: ${{ inputs.content }}
       with:
@@ -41,9 +53,12 @@ runs:
           const sectionId = process.env.SECTION_ID;
           const newContent = process.env.CONTENT;
 
-          // Define the markers
-          const startMarker = `<!-- auto-generated: ${sectionId} -->`;
-          const endMarker = `<!-- end auto-generated: ${sectionId} -->`;
+          // Define the header and section markers
+          const headerMarker = '<!-- This is an auto-generated comment: created by zouwu.fr -->';
+          const startMarker = `<!-- ${sectionId} -->`;
+          const endMarker = `<!-- end: ${sectionId} -->`;
+
+          console.log(`📝 Processing PR #${prNumber} with section ID: ${sectionId}`);
 
           // Get current PR description
           const { data: pr } = await github.rest.pulls.get({
@@ -53,23 +68,41 @@ runs:
           });
 
           let currentBody = pr.body || '';
-
+          
           // Build the new section
           const newSection = `${startMarker}\n${newContent}\n${endMarker}`;
+
+          let updatedBody;
+          let wasUpdated = false;
 
           // Check if section already exists
           const startIndex = currentBody.indexOf(startMarker);
           const endIndex = currentBody.indexOf(endMarker);
 
-          let updatedBody;
           if (startIndex !== -1 && endIndex !== -1) {
             // Replace existing section
+            console.log(`🔄 Updating existing section: ${sectionId}`);
             updatedBody = currentBody.substring(0, startIndex) +
                           newSection +
                           currentBody.substring(endIndex + endMarker.length);
+            wasUpdated = true;
           } else {
-            // Append new section at the end
-            updatedBody = currentBody.trim() + '\n\n---\n\n' + newSection;
+            // Add new section
+            console.log(`➕ Adding new section: ${sectionId}`);
+          
+            // Check if header exists
+            if (!currentBody.includes(headerMarker)) {
+              // Add header if this is the first auto-generated section
+              if (currentBody.trim()) {
+                updatedBody = `${currentBody.trim()}\n\n---\n\n${headerMarker}\n\n${newSection}`;
+              } else {
+                updatedBody = `${headerMarker}\n\n${newSection}`;
+              }
+            } else {
+              // Header exists, just append the new section
+              updatedBody = `${currentBody.trim()}\n\n${newSection}`;
+            }
+            wasUpdated = false;
           }
 
           // Update the PR
@@ -80,4 +113,5 @@ runs:
             body: updatedBody
           });
 
-          console.log(`✅ Updated PR #${prNumber} description with section: ${sectionId}`);
+          core.setOutput('updated', wasUpdated);
+          console.log(`✅ Successfully ${wasUpdated ? 'updated' : 'created'} section in PR #${prNumber}`);
